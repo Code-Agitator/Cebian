@@ -21,6 +21,7 @@ import {
 } from '@earendil-works/pi-agent-core';
 import {
   createInitialSystemMessage,
+  getOpenCodeSessionHeaders,
   toToolDeclaration,
   type Api,
   type Message,
@@ -133,6 +134,14 @@ interface CreateAgentOptions {
   thinkingLevel: ThinkingLevel;
   messages?: AgentMessage[];
   /**
+   * 本会话 id，用于 OpenCode 网关系列请求的每会话路由头。
+   *
+   * 刻意不写进 `AgentOptions.sessionId`：pi-agent-core 会把它透传给**所有** provider，
+   * 顺带打开 Anthropic message threads、OpenRouter 会话亲和、Mistral x-affinity 等既有
+   * 能力。那些是独立的行为变更，不该跟着「新增一个 provider」一起发生。
+   */
+  sessionId?: string;
+  /**
    * Optional pre-execution gate. pi-agent-core calls it after a tool's args
    * are validated and before `execute()`; returning `{ block: true, reason }`
    * blocks the call and emits an error tool result. Used to require user
@@ -161,6 +170,7 @@ function createCebianAgent(options: CreateAgentOptions): Agent {
     preamble,
     thinkingLevel,
     messages = [],
+    sessionId,
     beforeToolCall,
     prepareNextTurnWithContext,
     finishTurn,
@@ -239,8 +249,23 @@ function createCebianAgent(options: CreateAgentOptions): Agent {
 
     // 发送 LLM 请求的 stream 函数。pi 0.81 起 streamFn 必填（内置默认回退被移除），
     // 复用 compat 的 streamSimple：按 model.api 解析内置 provider，行为等价旧默认，
-    // apiKey 仍由下面的 getApiKey 动态解析
-    streamFn: streamSimple,
+    // apiKey 仍由下面的 getApiKey 动态解析。
+    //
+    // OpenCode 网关系列的请求必须带本会话的路由头，缺了会被拒。哪些目标算 OpenCode
+    // 由 pi-ai 判断（含指向该网关的自定义 provider），这里只把该头写进请求头，而不是
+    // 把 sessionId 塞进 stream options —— 后者会顺带打开其它 provider 的会话语义。
+    streamFn: (requestModel, context, requestOptions) => {
+      const openCodeHeaders = sessionId
+        ? getOpenCodeSessionHeaders(requestModel, sessionId)
+        : undefined;
+      return streamSimple(
+        requestModel,
+        context,
+        openCodeHeaders
+          ? { ...requestOptions, headers: { ...requestOptions?.headers, ...openCodeHeaders } }
+          : requestOptions,
+      );
+    },
 
     // Dynamic API key resolution (handles OAuth token refresh)
     getApiKey: (provider: string): Promise<string | undefined> =>

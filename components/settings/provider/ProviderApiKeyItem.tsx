@@ -3,14 +3,21 @@ import { toast } from "sonner";
 import { Unplug, Save } from "lucide-react";
 import { complete } from "@earendil-works/pi-ai/compat";
 import { getBuiltinModels, type BuiltinProvider } from '@earendil-works/pi-ai/providers/all';
-import type { Api, Model } from "@earendil-works/pi-ai";
+import { getOpenCodeSessionHeaders, type Api, type Model } from "@earendil-works/pi-ai";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { isCustomProvider } from "@/lib/providers/custom-models";
+import { PROBE_MODELS } from "@/lib/providers/registry";
 import { t } from "@/lib/i18n";
 import type { ApiKeyCredential } from "@/lib/persistence/storage";
+
+/**
+ * 探测请求的输出预算。真正要的只有一个 "ok"，但 `complete()` 不带 reasoning 选项，推理
+ * 模型的思考 token 也算在这个预算里：给小了会让整轮只有思考、没有正文，探测就假失败。
+ */
+const PROBE_MAX_TOKENS = 256;
 
 interface ProviderApiKeyItemProps {
   provider: string;
@@ -40,10 +47,16 @@ export function ProviderApiKeyItem({
     setKey(credential?.apiKey ?? "");
   }, [credential?.apiKey]);
 
-  const cheapestModel = useMemo(() => {
+  const probeModel = useMemo(() => {
     try {
       const models = modelsProp ?? (isCustomProvider(provider) ? [] : (getBuiltinModels(provider as BuiltinProvider) as Model<Api>[]));
       if (models.length === 0) return undefined;
+
+      // 配了探测模型的 provider 先用它：这些 provider 的低价档（免费 / contributor）对
+      // 第三方客户端另有门槛，拿最便宜的那个试只会假失败。模型被下架时退回最便宜的。
+      const preferred = PROBE_MODELS[provider];
+      const pinned = preferred ? models.find((m) => m.id === preferred) : undefined;
+      if (pinned) return pinned;
 
       return models.reduce((min, m) =>
         m.cost.input + m.cost.output < min.cost.input + min.cost.output ? m : min,
@@ -54,19 +67,28 @@ export function ProviderApiKeyItem({
   }, [provider, modelsProp]);
 
   const handleSave = async () => {
-    if (!cheapestModel || !key.trim()) return;
+    if (!probeModel || !key.trim()) return;
 
     setSaving(true);
 
+    // 探测也是一次真实请求：OpenCode 网关系列的请求缺每会话路由头会被拒。哪些目标算
+    // OpenCode 由 pi-ai 判断（含指向该网关的自定义 provider）；探测是一次性请求，
+    // 现造一个 id 即可，与压缩摘要对独立请求的处理一致。
+    const openCodeHeaders = getOpenCodeSessionHeaders(probeModel, crypto.randomUUID());
+
     try {
       const result = await complete(
-        cheapestModel,
+        probeModel,
         {
           messages: [
             { role: "user", content: "Reply only: ok", timestamp: Date.now() },
           ],
         },
-        { apiKey: key, maxTokens: 5 },
+        {
+          apiKey: key,
+          maxTokens: PROBE_MAX_TOKENS,
+          ...(openCodeHeaders ? { headers: openCodeHeaders } : {}),
+        },
       );
 
       // complete() resolves (not rejects) with an Error on failure
@@ -143,7 +165,7 @@ export function ProviderApiKeyItem({
     );
   };
 
-  if (!cheapestModel) {
+  if (!probeModel) {
     return (
       <div className="flex items-center gap-2">
         <p className="text-sm font-medium">{label}</p>

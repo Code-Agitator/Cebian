@@ -9,7 +9,6 @@ import {
   type Model,
   type TranscriptContext,
 } from '@earendil-works/pi-ai';
-import { streamSimple } from '@earendil-works/pi-ai/compat';
 import { getBuiltinModels, type BuiltinProvider } from '@earendil-works/pi-ai/providers/all';
 import { Type } from 'typebox';
 import { createCompactionSummaryMessage } from '@/lib/agent/compaction-summary';
@@ -94,8 +93,11 @@ function toolNames(message: Message | undefined): string[] {
 async function captureRequest(agent: Agent, text: string): Promise<{ payload: unknown; headers: Headers }> {
   const payloads: unknown[] = [];
   const headers: Headers[] = [];
+  // 包住工厂注入的 streamFn 而不是替换它：替换会绕开工厂那层对 stream options 的处理
+  // （OpenCode 会话头就加在那里），测出来的请求与线上不一致。
+  const inner = agent.streamFunction;
   agent.streamFunction = (m, context, options) =>
-    streamSimple(m, context, {
+    inner(m, context, {
       ...options,
       apiKey: 'test-key',
       onPayload: (payload) => {
@@ -110,6 +112,23 @@ async function captureRequest(agent: Agent, text: string): Promise<{ payload: un
   await agent.prompt(text);
   expect(headers).toHaveLength(1);
   return { payload: payloads[0], headers: headers[0] };
+}
+
+/**
+ * 用真实模型发一次请求并取回请求头。模型经 resolveModel 解析，与运行时一致（OpenRouter
+ * 的 Cebian 归因头由它写进 model.headers）。`sessionId` 只有会话头相关用例需要。
+ */
+async function requestHeaders(provider: string, sessionId?: string): Promise<Headers> {
+  const modelId = getBuiltinModels(provider as BuiltinProvider)[0].id;
+  const target = resolveModel({ provider, modelId }, {}, []);
+  if (!target) throw new Error(`unresolved ${provider}/${modelId}`);
+  const agent = createCebianAgent({
+    model: target,
+    preamble: { systemPrompt: 'base', tools: [] },
+    thinkingLevel: 'off',
+    sessionId,
+  });
+  return (await captureRequest(agent, 'hi')).headers;
 }
 
 describe('createCebianAgent · system 头', () => {
@@ -439,15 +458,6 @@ describe('createCebianAgent · 请求归因', () => {
     fakeBrowser.reset();
   });
 
-  // 模型经 resolveModel 解析，与运行时一致（OpenRouter 的 Cebian 归因头由它写进 model.headers）
-  async function requestHeaders(provider: string): Promise<Headers> {
-    const modelId = getBuiltinModels(provider as BuiltinProvider)[0].id;
-    const target = resolveModel({ provider, modelId }, {}, []);
-    if (!target) throw new Error(`unresolved ${provider}/${modelId}`);
-    const agent = createCebianAgent({ model: target, preamble: { systemPrompt: 'base', tools: [] }, thinkingLevel: 'off' });
-    return (await captureRequest(agent, 'hi')).headers;
-  }
-
   it('OpenRouter 请求不带 pi 的归因头，Cebian 归因原样保留', async () => {
     const headers = await requestHeaders('openrouter');
     expect(headers.get('X-OpenRouter-Title')).toBeNull();
@@ -459,5 +469,31 @@ describe('createCebianAgent · 请求归因', () => {
   it('NVIDIA NIM 请求不带 pi 的计费来源头', async () => {
     const headers = await requestHeaders('nvidia');
     expect(headers.get('X-BILLING-INVOKE-ORIGIN')).toBeNull();
+  });
+});
+
+describe('createCebianAgent · OpenCode 会话头', () => {
+  beforeEach(() => {
+    fakeBrowser.reset();
+  });
+
+  // OpenCode Go 要求每个会话带稳定 id，缺了请求会被拒（见 factory 的 OPENCODE_PROVIDERS）
+  it('OpenCode Go 请求带上本会话的路由头', async () => {
+    const headers = await requestHeaders('opencode-go', 'session-7f3a');
+    expect(headers.get('x-opencode-session')).toBe('session-7f3a');
+  });
+
+  it('没有会话 id 时不发空头', async () => {
+    const headers = await requestHeaders('opencode-go');
+    expect(headers.get('x-opencode-session')).toBeNull();
+  });
+
+  // 该头只对 OpenCode 系发；其余 provider 的请求必须一字不变。
+  // openrouter 的首个模型走 anthropic-messages + openrouter.ai，一旦 sessionId 被透传过去
+  // 就会生成 x-session-id —— 用它当哨兵，工厂里的 provider 判断被删掉时这个用例会变红。
+  it('其他 provider 不因会话 id 收到该头', async () => {
+    const headers = await requestHeaders('openrouter', 'session-7f3a');
+    expect(headers.get('x-opencode-session')).toBeNull();
+    expect(headers.get('x-session-id')).toBeNull();
   });
 });

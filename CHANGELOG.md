@@ -21,8 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### 新增 / Added
 
 - 新增模型：Claude Fable 5.2（Anthropic、GitHub Copilot、OpenRouter、Vercel AI Gateway），GPT-6.2 Astra 与 GPT-6.2 Sol（OpenAI、OpenAI Codex、GitHub Copilot、OpenRouter、Vercel AI Gateway），Gemini 4 Carbon / Hydrogen / Neon（Google、GitHub Copilot、OpenRouter、Vercel AI Gateway），GitHub Copilot 的 MAI Code 2 与 MAI Code 2 Flash，OpenAI 的 GPT-6 Cyber，Kimi K3.1 Pro（Fireworks、Hugging Face、Together），Qwen4 Max（OpenRouter、Vercel AI Gateway）；其余提供商的内置模型列表也同步到了最新
+- 新增 OpenCode Go 供应商：填入 Go 订阅的 API Key 即可使用其全部对话模型
 
 - Added models: Claude Fable 5.2 (Anthropic, GitHub Copilot, OpenRouter, Vercel AI Gateway), GPT-6.2 Astra and GPT-6.2 Sol (OpenAI, OpenAI Codex, GitHub Copilot, OpenRouter, Vercel AI Gateway), Gemini 4 Carbon / Hydrogen / Neon (Google, GitHub Copilot, OpenRouter, Vercel AI Gateway), MAI Code 2 and MAI Code 2 Flash on GitHub Copilot, GPT-6 Cyber on OpenAI, Kimi K3.1 Pro (Fireworks, Hugging Face, Together), and Qwen4 Max (OpenRouter, Vercel AI Gateway); the built-in model lists of the other providers are refreshed too
+- Add the OpenCode Go provider: enter a Go subscription's API key and use all of its chat models
 
 ### 变更 / Changed
 
